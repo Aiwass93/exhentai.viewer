@@ -35,7 +35,7 @@ All keyboard actions can be reversed by the same keys (for example, if you use `
 | `g` | Gallery | Returns to the gallery index. |
 | `v` | Enter viewer | Re-activates the viewer if disabled. |
 | `x` | Quit viewer | Exits the viewer. |
-| `q` / `esc` | Universal "quit" key to quit focus, full screen, etc. |
+| `q` / `esc` | Quit | Universal "quit" key to quit focus, full screen, etc. |
 
 ## Customization
 
