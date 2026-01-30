@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ExHentai Viewer
 // @version      7.0
-// @description  keyboard driven, highly customizable user script for e-hentai and exhentai.
+// @description  A minimalist, keyboard-driven, highly customizable viewer for exhentai.org and e-hentai.org.
 // @author       Alison Andre aka John Cake
 // @match        https://exhentai.org/s/*
 // @match        https://g.e-hentai.org/s/*
@@ -161,6 +161,49 @@
         }
 
         return { pageNum, pageCount };
+    }
+
+    function pickNavUrl(doc, dir, currentNum) {
+        // 1) Prefer rel=prev/next if present
+        const relLink = doc.querySelector('link[rel="' + dir + '"]');
+        if (relLink && relLink.href) return relLink.href;
+
+        const relAnchor = doc.querySelector('a[rel="' + dir + '"]');
+        if (relAnchor && relAnchor.href) return relAnchor.href;
+
+        // 2) Fallback to the nav container
+        const container = doc.querySelector(dir === 'prev' ? '#i2' : '#i3');
+        if (!container) return null;
+
+        const anchors = Array.from(container.querySelectorAll('a[href]'));
+        if (!anchors.length) return null;
+
+        // 3) Choose by page number (avoid << and >>)
+        if (Number.isFinite(currentNum)) {
+            let bestHref = null;
+            let bestNum = dir === 'prev' ? -Infinity : Infinity;
+
+            for (const a of anchors) {
+                const n = parsePageNumFromUrl(a.href);
+                if (!Number.isFinite(n)) continue;
+
+                if (dir === 'prev') {
+                    if (n < currentNum && n > bestNum) {
+                        bestNum = n;
+                        bestHref = a.href;
+                    }
+                } else {
+                    if (n > currentNum && n < bestNum) {
+                        bestNum = n;
+                        bestHref = a.href;
+                    }
+                }
+            }
+            return bestHref;
+        }
+
+        // 4) Last resort: first link
+        return anchors[0].href || null;
     }
 
     function loadKeys() {
@@ -460,19 +503,19 @@
                 const response = await fetch(url, { credentials: 'include' });
                 const html = await response.text();
                 const doc = new DOMParser().parseFromString(html, 'text/html');
-                const prevEl = doc.querySelector('#i2 a');
 
                 const imgEl = doc.querySelector('#img');
-                const nextEl = doc.querySelector('#i3 a');
                 if (!imgEl) return null;
 
                 const info = extractPageInfo(doc, url);
+                const prevUrl = pickNavUrl(doc, 'prev', info.pageNum);
+                const nextUrl = pickNavUrl(doc, 'next', info.pageNum);
 
                 const data = {
                     url,
                     img: imgEl.src,
-                    next: nextEl ? nextEl.href : null,
-                    prev: prevEl ? prevEl.href : null,
+                    next: nextUrl,
+                    prev: prevUrl,
                     title: doc.title,
                     pageNum: info.pageNum,
                     pageCount: info.pageCount
@@ -1188,8 +1231,6 @@
             // Bootstrap from current DOM
             const currentUrl = window.location.href;
             const imgEl = document.querySelector('#img');
-            const nextEl = document.querySelector('#i3 a');
-            const prevEl = document.querySelector('#i2 a');
 
             if (!imgEl) {
                 console.error('[Reader] Could not find image element');
@@ -1197,11 +1238,14 @@
             }
 
             const info = extractPageInfo(document, currentUrl);
+            const prevUrl = pickNavUrl(document, 'prev', info.pageNum);
+            const nextUrl = pickNavUrl(document, 'next', info.pageNum);
+
             const firstPage = {
                 url: currentUrl,
                 img: imgEl.src,
-                next: nextEl ? nextEl.href : null,
-                prev: prevEl ? prevEl.href : null,
+                next: nextUrl,
+                prev: prevUrl,
                 title: document.title,
                 pageNum: info.pageNum,
                 pageCount: info.pageCount
@@ -1327,57 +1371,14 @@
             else this.goBackward();
         }
 
-//        async goForward() {
-//            const targetIndex = state.index + 2;
-//            const exists = await PageManager.ensureIndex(targetIndex);
-//            if (!exists) return this.showToast('End of gallery');
-//            state.index = targetIndex;
-//            this.render();
-//            this.updateHistory();
-//            PageManager.discoverAhead(state.options.preloadCount);
-//        }
-
         async goForward() {
             await this.navigateBy(this.getStep());
         }
-
-//        goBackward() {
-//            if (state.index === 0) return this.showToast('Beginning of gallery');
-//            state.index = Math.max(0, state.index - 2);
-//            this.render();
-//            this.updateHistory();
-//        }
 
         async goBackward() {
             await this.navigateBy(-this.getStep());
         }
 
-//        async adjustPage(delta) {
-//            // 1. Change 'const' to 'let' because targetIndex might change
-//            let targetIndex = state.index + delta;
-
-            // 2. Add this NEW block to handle loading previous pages
-//            if (targetIndex < 0) {
-//                await PageManager.discoverBehind(state.options.preloadCount);
-//                // Recalculate because state.index might have shifted
-//                targetIndex = state.index + delta;
-//            }
-
-            // 3. This check remains, but now it only fires if discovery failed
-//            if (targetIndex < 0) return this.showToast('Cannot adjust further');
-
-            // --- The rest of your code stays exactly the same ---
-//            const ok = await PageManager.ensureIndex(targetIndex + 1);
-//            if (!ok && delta > 0) return this.showToast('No more pages');
-
-//            state.index = targetIndex;
-//            this.render();
-//            this.updateHistory();
-
-//            const p1 = state.index + 1;
-//            const p2 = state.index + 2;
-//            this.showToast(`Pages ${p1}–${p2}`);
-//        }
         async adjustPage(delta) {
             await this.navigateBy(delta, { toast: true });
         }
