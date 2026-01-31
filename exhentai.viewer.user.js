@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ExHentai Viewer
 // @version      7.0
-// @description  A minimalist, keyboard-driven, highly customizable viewer for exhentai.org and e-hentai.org.
+// @description  keyboard driven, highly customizable user script for e-hentai and exhentai.
 // @author       Alison Andre aka John Cake
 // @match        https://exhentai.org/s/*
 // @match        https://g.e-hentai.org/s/*
@@ -60,6 +60,7 @@
         urlToIndex: new Map(),
         loading: false,
         loadingPromise: null,
+        loadingKind: null,
         focusActive: false,
         viewerActive: true,
         configOpen: false,
@@ -165,10 +166,10 @@
 
     function pickNavUrl(doc, dir, currentNum) {
         // 1) Prefer rel=prev/next if present
-        const relLink = doc.querySelector('link[rel="' + dir + '"]');
+        const relLink = doc.querySelector(`link[rel="${dir}"]`);
         if (relLink && relLink.href) return relLink.href;
 
-        const relAnchor = doc.querySelector('a[rel="' + dir + '"]');
+        const relAnchor = doc.querySelector(`a[rel="${dir}"]`);
         if (relAnchor && relAnchor.href) return relAnchor.href;
 
         // 2) Fallback to the nav container
@@ -199,7 +200,7 @@
                     }
                 }
             }
-            return bestHref;
+            return bestHref; // null at boundaries
         }
 
         // 4) Last resort: first link
@@ -503,7 +504,6 @@
                 const response = await fetch(url, { credentials: 'include' });
                 const html = await response.text();
                 const doc = new DOMParser().parseFromString(html, 'text/html');
-
                 const imgEl = doc.querySelector('#img');
                 if (!imgEl) return null;
 
@@ -563,21 +563,26 @@
             return state.pages[index] || null;
         },
 
-        async _runLoad(task) {
-            if (state.loadingPromise) return state.loadingPromise;
+        async _runLoad(kind, task) {
+            while (state.loadingPromise) {
+                if (state.loadingKind === kind) return state.loadingPromise;
+                await state.loadingPromise;
+            }
+            state.loadingKind = kind;
             state.loadingPromise = (async () => {
                 state.loading = true;
                 try { return await task(); }
                 finally {
                     state.loading = false;
                     state.loadingPromise = null;
+                    state.loadingKind = null;
                 }
             })();
             return state.loadingPromise;
         },
 
         async discoverAhead(count) {
-            return this._runLoad(async () => {
+            return this._runLoad('ahead', async () => {
                 const last = state.pages[state.pages.length - 1];
                 if (!last || !last.next) return 0;
 
@@ -600,7 +605,7 @@
         },
 
         async discoverBehind(count) {
-            return this._runLoad(async () => {
+            return this._runLoad('behind', async () => {
                 const first = state.pages[0];
                 if (!first || !first.prev) return 0;
 
@@ -619,7 +624,7 @@
 
                 if (!newPages.length) return 0;
 
-                newPages.reverse().forEach(p => state.pages.unshift(p));
+                newPages.forEach(p => state.pages.unshift(p));
                 state.index += newPages.length;
 
                 state.urlToIndex.clear();
@@ -1371,14 +1376,57 @@
             else this.goBackward();
         }
 
+//        async goForward() {
+//            const targetIndex = state.index + 2;
+//            const exists = await PageManager.ensureIndex(targetIndex);
+//            if (!exists) return this.showToast('End of gallery');
+//            state.index = targetIndex;
+//            this.render();
+//            this.updateHistory();
+//            PageManager.discoverAhead(state.options.preloadCount);
+//        }
+
         async goForward() {
             await this.navigateBy(this.getStep());
         }
+
+//        goBackward() {
+//            if (state.index === 0) return this.showToast('Beginning of gallery');
+//            state.index = Math.max(0, state.index - 2);
+//            this.render();
+//            this.updateHistory();
+//        }
 
         async goBackward() {
             await this.navigateBy(-this.getStep());
         }
 
+//        async adjustPage(delta) {
+//            // 1. Change 'const' to 'let' because targetIndex might change
+//            let targetIndex = state.index + delta;
+
+            // 2. Add this NEW block to handle loading previous pages
+//            if (targetIndex < 0) {
+//                await PageManager.discoverBehind(state.options.preloadCount);
+//                // Recalculate because state.index might have shifted
+//                targetIndex = state.index + delta;
+//            }
+
+            // 3. This check remains, but now it only fires if discovery failed
+//            if (targetIndex < 0) return this.showToast('Cannot adjust further');
+
+            // --- The rest of your code stays exactly the same ---
+//            const ok = await PageManager.ensureIndex(targetIndex + 1);
+//            if (!ok && delta > 0) return this.showToast('No more pages');
+
+//            state.index = targetIndex;
+//            this.render();
+//            this.updateHistory();
+
+//            const p1 = state.index + 1;
+//            const p2 = state.index + 2;
+//            this.showToast(`Pages ${p1}–${p2}`);
+//        }
         async adjustPage(delta) {
             await this.navigateBy(delta, { toast: true });
         }
