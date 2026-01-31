@@ -502,6 +502,7 @@
             if (this.cache.has(url)) return this.cache.get(url);
             try {
                 const response = await fetch(url, { credentials: 'include' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const html = await response.text();
                 const doc = new DOMParser().parseFromString(html, 'text/html');
                 const imgEl = doc.querySelector('#img');
@@ -737,10 +738,6 @@
                 img.decoding = 'async';
                 img.loading = 'eager';
             });
-
-            // Hide original content
-            const original = document.querySelector('#i1');
-            if (original) original.style.display = 'none';
 
             // Build key rows
             this.buildConfigGrid();
@@ -1028,13 +1025,17 @@
             this.root.addEventListener('mouseleave', () => { state.hoveredImage = null; });
 
             // Menu toggle
-            this.menuToggle.addEventListener('click', () => this.toggleConfig(true));
-
-            // Focus overlay exit
             this.menuToggle.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 this.toggleConfig(true);
+            });
+
+            // Focus overlay exit (click anywhere on the overlay to exit)
+            this.focusOverlay.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.exitFocus();
             });
 
             // Config overlay buttons
@@ -1070,6 +1071,14 @@
             const handler = (e) => {
                 e.preventDefault();
                 e.stopImmediatePropagation();
+
+                // Allow Escape to cancel capture
+                if (e.key === 'Escape') {
+                    this.capturingKey = null;
+                    btnEl.classList.remove('listening');
+                    window.removeEventListener('keydown', handler, true);
+                    return;
+                }
 
                 // Ignore pure modifiers
                 if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
@@ -1174,8 +1183,11 @@
                         if (Number.isFinite(n)) state.totalPages = n;
                     }
                 }
-            } catch (_) {}
-            state.totalPagesLoading = false;
+            } catch (_) {
+                // Silently fail - totalPages will remain null
+            } finally {
+                state.totalPagesLoading = false;
+            }
             this.updateJumpMeta();
         }
 
@@ -1541,6 +1553,9 @@
             this.showToast('Viewer off');
 
             if (this.original) this.original.style.display = '';
+
+            PageFetcher.cache.clear();
+            PageFetcher.imgCache.clear();
         }
 
         // ── BACK TO GALLERY ─────────────────────────────────────
