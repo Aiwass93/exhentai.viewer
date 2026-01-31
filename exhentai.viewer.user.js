@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         ExHentai Viewer
-// @version      9.0
+// @version      8.0
 // @description  keyboard driven, highly customizable user script for e-hentai and exhentai.
 // @author       Alison Andre aka John Cake
 // @match        https://exhentai.org/s/*
@@ -56,6 +56,7 @@
     const state = {
         pages: [],
         index: 0,
+        direction: initialOptions.direction,
         urlToIndex: new Map(),
         loading: false,
         loadingPromise: null,
@@ -67,6 +68,7 @@
         galleryUrl: null,
         keys: loadKeys(),
         options: initialOptions,
+        viewMode: initialOptions.viewMode,
         totalPages: null,
         totalPagesLoading: false,
         jumpOpen: false,
@@ -538,9 +540,14 @@
             img.loading = 'eager';
             img.src = src;
 
-            const p = new Promise((resolve, reject) => {
-                img.onload = () => { this.imgCache.set(src, true); resolve(); };
-                img.onerror = (e) => { this.imgCache.delete(src); reject(e); };
+            const p = (img.decode
+                ? img.decode().catch(() => {})
+                : new Promise(res => {
+                    img.onload = res;
+                    img.onerror = res;
+                })
+            ).then(() => {
+                this.imgCache.set(src, true);
             });
 
             this.imgCache.set(src, p);
@@ -558,10 +565,10 @@
         },
 
         async _runLoad(kind, task) {
-            if (state.loadingPromise && state.loadingKind === kind) {
-                return state.loadingPromise;
+            while (state.loadingPromise) {
+                if (state.loadingKind === kind) return state.loadingPromise;
+                await state.loadingPromise;
             }
-            // If a different kind is loading, do not await it; start a new one.
             state.loadingKind = kind;
             state.loadingPromise = (async () => {
                 state.loading = true;
@@ -621,13 +628,8 @@
                 newPages.forEach(p => state.pages.unshift(p));
                 state.index += newPages.length;
 
-                const shift = newPages.length;
-                // 1) bump existing indices
-                for (const [url, idx] of state.urlToIndex.entries()) {
-                    state.urlToIndex.set(url, idx + shift);
-                }
-                // 2) add new pages now at the front
-                newPages.forEach((p, i) => state.urlToIndex.set(p.url, i));
+                state.urlToIndex.clear();
+                state.pages.forEach((p, i) => state.urlToIndex.set(p.url, i));
 
                 return newPages.length;
             });
@@ -735,8 +737,6 @@
             [this.pageLeft, this.pageRight].forEach(img => {
                 img.decoding = 'async';
                 img.loading = 'eager';
-                img.addEventListener('pointerenter', () => { state.hoveredImage = img; });
-                img.addEventListener('pointerleave', () => { state.hoveredImage = null; });
             });
 
             // Build key rows
@@ -762,20 +762,21 @@
 
         applyViewMode() {
             const mode = state.options.viewMode === 'single' ? 'single' : 'spread';
+            state.viewMode = mode;
             this.root.classList.toggle('single-mode', mode === 'single');
         }
 
         toggleViewMode() {
-            const newMode = state.options.viewMode === 'single' ? 'spread' : 'single';
-            state.options.viewMode = newMode;
+            state.viewMode = state.viewMode === 'single' ? 'spread' : 'single';
+            state.options.viewMode = state.viewMode;
             saveOptions(state.options);
             this.applyViewMode();
             this.render();
-            this.showToast(newMode === 'single' ? 'Single page' : 'Spread');
+            this.showToast(state.viewMode === 'single' ? 'Single page' : 'Spread');
         }
 
         getStep() {
-            return state.options.viewMode === 'single' ? 1 : 2;
+            return state.viewMode === 'single' ? 1 : 2;
         }
 
         getPageLabel() {
@@ -789,18 +790,10 @@
 
         getPositionToast() {
             const { cur, next } = this.getPageLabel();
-            if (state.options.viewMode === 'single') return cur ? `Page ${cur}` : 'Page';
+            if (state.viewMode === 'single') return cur ? `Page ${cur}` : 'Page';
             if (cur && next) return `Pages ${cur}–${next}`;
             if (cur) return `Page ${cur}`;
             return 'Page';
-        }
-
-        maybeBackfillBehind() {
-            // Keep a small safety buffer behind; tune the threshold to half the preloadCount
-            const threshold = Math.max(2, Math.floor(state.options.preloadCount / 2));
-            if (state.index < threshold) {
-                PageManager.discoverBehind(state.options.preloadCount);
-            }
         }
 
         async navigateBy(delta, opts = {}) {
@@ -825,16 +818,9 @@
             state.index = targetIndex;
             this.render();
             this.updateHistory();
-            this.maybeBackfillBehind();
-            if (state.index < state.options.preloadCount) {
-                PageManager.discoverBehind(state.options.preloadCount);
-            }
-            const aheadNeed = state.options.viewMode === 'spread'
-                ? state.options.preloadCount + 4  // small top-up for 2-page stride
-                : state.options.preloadCount;
-            PageManager.discoverAhead(aheadNeed);
+            PageManager.discoverAhead(state.options.preloadCount);
 
-            if (state.options.viewMode === 'spread') {
+            if (state.viewMode === 'spread') {
                 const rv = this.renderVersion;
                 PageManager.ensureIndex(state.index + 1).then(ok2 => {
                     if (!ok2) return;
@@ -868,6 +854,7 @@
             dirSelect.onchange = () => {
                 o.direction = dirSelect.value === 'ltr' ? 'ltr' : 'rtl';
                 saveOptions(o);
+                state.direction = o.direction;
                 this.render();
             };
             addRow('Reading direction', dirSelect);
@@ -881,6 +868,7 @@
             modeSelect.onchange = () => {
                 o.viewMode = modeSelect.value === 'single' ? 'single' : 'spread';
                 saveOptions(o);
+                state.viewMode = o.viewMode;
                 this.applyViewMode();
                 this.render();
             };
@@ -946,6 +934,21 @@
                 saveOptions(o);
             };
             addRow('Toast duration', toastSelect);
+        }
+
+        trackHover(e) {
+            const x = e.clientX;
+            const y = e.clientY;
+
+            const over = (img) => {
+                if (!img || img.classList.contains('hidden')) return false;
+                const r = img.getBoundingClientRect();
+                return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+            };
+
+            if (over(this.pageLeft)) state.hoveredImage = this.pageLeft;
+            else if (over(this.pageRight)) state.hoveredImage = this.pageRight;
+            else state.hoveredImage = null;
         }
 
         buildConfigGrid() {
@@ -1016,6 +1019,10 @@
                 e.stopPropagation();
                 this.handleNav('right');
             });
+
+            // Hover tracking for focus (works even with nav overlays)
+            this.root.addEventListener('mousemove', (e) => this.trackHover(e));
+            this.root.addEventListener('mouseleave', () => { state.hoveredImage = null; });
 
             // Menu toggle
             this.menuToggle.addEventListener('click', (e) => {
@@ -1267,8 +1274,7 @@
             state.urlToIndex.set(currentUrl, 0);
 
             // Discover ahead
-            PageManager.discoverAhead(state.options.preloadCount); // do not await
-            PageManager.discoverBehind(state.options.preloadCount); // warm up behind in background
+            await PageManager.discoverAhead(state.options.preloadCount);
 
             // Initial render
             this.applyOptions();
@@ -1282,11 +1288,11 @@
             const page1 = PageManager.get(state.index);
             const page2 = PageManager.get(state.index + 1);
 
-            if (state.options.viewMode === 'single') {
+            if (state.viewMode === 'single') {
                 this.setImage(this.pageLeft, page1);
                 this.setImage(this.pageRight, null);
             } else {
-                const [leftPage, rightPage] = state.options.direction === 'rtl'
+                const [leftPage, rightPage] = state.direction === 'rtl'
                     ? [page2, page1]
                     : [page1, page2];
 
@@ -1352,23 +1358,20 @@
             this.pageLeft.classList.remove('hidden');
             this.pageRight.classList.remove('hidden');
 
-            const applyLeft  = () => {
-                if (this.pageLeft.dataset.token === leftToken) {
-                    this.pageLeft.src = leftPage.img;
-                    this.pageLeft.dataset.src = leftPage.img;
-                }
-            };
-            const applyRight = () => {
-                if (this.pageRight.dataset.token === rightToken) {
-                    this.pageRight.src = rightPage.img;
-                    this.pageRight.dataset.src = rightPage.img;
-                }
-            };
+            const wait = (p) => (p && typeof p.then === 'function') ? p : Promise.resolve();
 
-            const w1 = PageFetcher.preloadImage(leftPage.img);
-            const w2 = PageFetcher.preloadImage(rightPage.img);
-            (w1 && w1.then ? w1.then(applyLeft) : applyLeft());
-            (w2 && w2.then ? w2.then(applyRight) : applyRight());
+            const p1 = PageFetcher.preloadImage(leftPage.img);
+            const p2 = PageFetcher.preloadImage(rightPage.img);
+
+            Promise.all([wait(p1), wait(p2)]).then(() => {
+                if (this.pageLeft.dataset.token !== leftToken) return;
+                if (this.pageRight.dataset.token !== rightToken) return;
+
+                this.pageLeft.src = leftPage.img;
+                this.pageLeft.dataset.src = leftPage.img;
+                this.pageRight.src = rightPage.img;
+                this.pageRight.dataset.src = rightPage.img;
+            });
         }
 
         updateHistory() {
@@ -1378,31 +1381,75 @@
 
         // ── NAVIGATION ──────────────────────────────────────────
         handleNav(side) {
-            const isForward = state.options.direction === 'rtl'
+            const isForward = state.direction === 'rtl'
                 ? side === 'left'
                 : side === 'right';
             if (isForward) this.goForward();
             else this.goBackward();
         }
 
+//        async goForward() {
+//            const targetIndex = state.index + 2;
+//            const exists = await PageManager.ensureIndex(targetIndex);
+//            if (!exists) return this.showToast('End of gallery');
+//            state.index = targetIndex;
+//            this.render();
+//            this.updateHistory();
+//            PageManager.discoverAhead(state.options.preloadCount);
+//        }
+
         async goForward() {
             await this.navigateBy(this.getStep());
         }
+
+//        goBackward() {
+//            if (state.index === 0) return this.showToast('Beginning of gallery');
+//            state.index = Math.max(0, state.index - 2);
+//            this.render();
+//            this.updateHistory();
+//        }
 
         async goBackward() {
             await this.navigateBy(-this.getStep());
         }
 
+//        async adjustPage(delta) {
+//            // 1. Change 'const' to 'let' because targetIndex might change
+//            let targetIndex = state.index + delta;
+
+            // 2. Add this NEW block to handle loading previous pages
+//            if (targetIndex < 0) {
+//                await PageManager.discoverBehind(state.options.preloadCount);
+//                // Recalculate because state.index might have shifted
+//                targetIndex = state.index + delta;
+//            }
+
+            // 3. This check remains, but now it only fires if discovery failed
+//            if (targetIndex < 0) return this.showToast('Cannot adjust further');
+
+            // --- The rest of your code stays exactly the same ---
+//            const ok = await PageManager.ensureIndex(targetIndex + 1);
+//            if (!ok && delta > 0) return this.showToast('No more pages');
+
+//            state.index = targetIndex;
+//            this.render();
+//            this.updateHistory();
+
+//            const p1 = state.index + 1;
+//            const p2 = state.index + 2;
+//            this.showToast(`Pages ${p1}–${p2}`);
+//        }
         async adjustPage(delta) {
             await this.navigateBy(delta, { toast: true });
         }
 
         toggleDirection() {
-            const newDirection = state.options.direction === 'rtl' ? 'ltr' : 'rtl';
-            state.options.direction = newDirection;
+            state.direction = state.direction === 'rtl' ? 'ltr' : 'rtl';
+            state.options.direction = state.direction;
             saveOptions(state.options);
+            this.buildOptions();
             this.render();
-            const label = newDirection === 'rtl'
+            const label = state.direction === 'rtl'
                 ? '← Right-to-Left (Manga)'
                 : '→ Left-to-Right';
             this.showToast(label);
@@ -1521,18 +1568,12 @@
         }
 
         findGalleryUrl() {
-            const canonical = document.querySelector('link[rel="canonical"]');
-            if (canonical && canonical.href) return canonical.href;
-
             const ref = document.referrer;
             const pat = /\/g\/\d+\/[0-9a-f]+/i;
             if (pat.test(ref)) return ref;
             const anchor = Array.from(document.querySelectorAll('a'))
                 .find(a => pat.test(a.href));
-            if (anchor) return anchor.href;
-            const crumb = document.querySelector('#gdc a, .ig a');
-            if (crumb && /\/g\/\d+\/[0-9a-f]+/i.test(crumb.href)) return crumb.href;
-            return null;
+            return anchor ? anchor.href : null;
         }
 
         // ── CONFIG UI ───────────────────────────────────────────
@@ -1592,18 +1633,15 @@
                 }
                 if (comboMatches(combo, k.adjustPrev)) {
                     consume();
-                    const delta = (state.options.direction === 'rtl') ? 1 : -1;
+                    const delta = (state.direction === 'rtl') ? 1 : -1;
                     this.focusNavigate(delta);
                     return;
                 }
                 if (comboMatches(combo, k.adjustNext)) {
                     consume();
-                    const delta = (state.options.direction === 'rtl') ? -1 : 1;
+                    const delta = (state.direction === 'rtl') ? -1 : 1;
                     this.focusNavigate(delta);
                     return;
-                }
-                if (!['Shift','Control','Alt','Meta'].includes(e.key)) {
-                    consume(); // prevent scrolling for any other key while focused
                 }
                 return;
             }
@@ -1692,13 +1730,13 @@
 
             if (comboMatches(combo, k.adjustPrev)) {
                 consume();
-                const delta = (state.options.direction === 'rtl') ? 1 : -1;
+                const delta = (state.direction === 'rtl') ? 1 : -1;
                 this.adjustPage(delta);
                 return;
             }
             if (comboMatches(combo, k.adjustNext)) {
                 consume();
-                const delta = (state.options.direction === 'rtl') ? -1 : 1;
+                const delta = (state.direction === 'rtl') ? -1 : 1;
                 this.adjustPage(delta);
                 return;
             }
